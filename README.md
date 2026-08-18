@@ -6,7 +6,7 @@ It is a sandbox Docker dev container that restricts Claude Code's access to the 
 
 It is loosely based on https://github.com/anthropics/claude-code/tree/main/.devcontainer
 
-It is designed as a headless andbox only. It contains no human-facing features. It only restricts what Claude Code can do and and makes cost the only risk of the `--dangerously-skip-permissions` flag.
+It is designed as a headless sandbox only. It contains no human-facing features. It only restricts what Claude Code can do and and makes cost the only risk of the `--dangerously-skip-permissions` flag.
 
 ## Running
 
