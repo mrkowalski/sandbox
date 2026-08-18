@@ -10,5 +10,14 @@ It is a headless sandbox; it contains no human-facing features. It only restrict
 
 ## Running
 
-- `devcontainer up --workspace-folder . --remove-existing-container`
-- `devcontainer exec --workspace-folder . claude --dangerously-skip-permissions`
+### Install devcontainers
+
+`npm install -g @devcontainers/cli`
+
+### Start the dev container
+
+`devcontainer up --workspace-folder . --remove-existing-container`
+
+### Run Claude Code inside the dev container
+
+`devcontainer exec --workspace-folder . claude --dangerously-skip-permissions`
