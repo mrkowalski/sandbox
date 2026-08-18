@@ -1,8 +1,5 @@
 FROM node:24-trixie-slim
 
-ARG TZ
-ENV TZ="$TZ"
-
 ARG CLAUDE_CODE_VERSION=latest
 
 # Install basic development tools and iptables/ipset
@@ -12,8 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   procps \
   sudo \
   fzf \
-  zsh \
-  man-db \
   unzip \
   gnupg2 \
   gh \
@@ -26,7 +21,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   nano \
   vim \
   wget \
-  curl \
   ca-certificates \
   && update-ca-certificates && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -40,7 +34,9 @@ ARG USERNAME=node
 RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
   && mkdir /commandhistory \
   && touch /commandhistory/.bash_history \
-  && chown -R $USERNAME /commandhistory
+  && chown -R $USERNAME /commandhistory \
+  && echo "$SNIPPET" >> /home/$USERNAME/.bashrc \
+  && chown $USERNAME:$USERNAME /home/$USERNAME/.bashrc
 
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
@@ -51,12 +47,6 @@ RUN mkdir -p /workspace /home/node/.claude && \
 
 WORKDIR /workspace
 
-ARG GIT_DELTA_VERSION=0.18.2
-RUN ARCH=$(dpkg --print-architecture) && \
-  wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
-  sudo dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
-  rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
-
 # Set up non-root user
 USER node
 
@@ -64,31 +54,24 @@ USER node
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH=$PATH:/usr/local/share/npm-global/bin
 
-# Set the default shell to zsh rather than sh
-ENV SHELL=/bin/zsh
-
 # Set the default editor and visual
-ENV EDITOR=nano
-ENV VISUAL=nano
-
-# Default powerline10k theme
-ARG ZSH_IN_DOCKER_VERSION=1.2.0
-RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/v${ZSH_IN_DOCKER_VERSION}/zsh-in-docker.sh)" -- \
-  -p git \
-  -p fzf \
-  -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
-  -a "source /usr/share/doc/fzf/examples/completion.zsh" \
-  -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  -x
+ENV EDITOR=vim
+ENV VISUAL=vim
 
 # Install Claude
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
-
-# Copy and set up firewall script
+# Copy and set up scripts
 COPY init-firewall.sh /usr/local/bin/
+COPY verify.sh /usr/local/bin/
 USER root
-RUN chmod +x /usr/local/bin/init-firewall.sh && \
-  echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
-  chmod 0440 /etc/sudoers.d/node-firewall
+RUN echo 'export PATH="$PATH:/usr/local/share/npm-global/bin"' \
+      > /etc/profile.d/npm-global-path.sh && \
+    chmod 0644 /etc/profile.d/npm-global-path.sh && \
+    chmod +x /usr/local/bin/init-firewall.sh && \
+    chmod +x /usr/local/bin/verify.sh && \
+    echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
+    echo "node ALL=(root) NOPASSWD: /usr/local/bin/verify.sh" > /etc/sudoers.d/verify && \
+    chmod 0440 /etc/sudoers.d/node-firewall && \
+    chmod 0440 /etc/sudoers.d/verify
 USER node
