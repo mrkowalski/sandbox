@@ -1,6 +1,26 @@
 #!/bin/bash
+#
+# init-firewall.sh - install the default-deny egress firewall for the sandbox.
+#
+# Builds an `allowed-domains` ipset from the hostnames listed in the whitelist
+# file, then sets every iptables chain policy to DROP and accepts only traffic
+# matching that set.
+#
+# The whitelist is read from $ALLOWED_DOMAINS_FILE, defaulting to
+# /usr/local/etc/allowed-domains.txt.
+#
+# Correctness of the resulting ruleset is asserted separately by verify.sh,
+# which devcontainer.json runs immediately after this script.
+
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
+
+ALLOWED_DOMAINS_FILE="${ALLOWED_DOMAINS_FILE:-/usr/local/etc/allowed-domains.txt}"
+
+if [ ! -r "$ALLOWED_DOMAINS_FILE" ]; then
+    echo "ERROR: whitelist file not found or unreadable: $ALLOWED_DOMAINS_FILE"
+    exit 1
+fi
 
 # 1. Extract Docker DNS info BEFORE any flushing
 DOCKER_DNS_RULES=$(iptables-save -t nat | grep "127\.0\.0\.11" || true)
@@ -10,8 +30,6 @@ iptables -F
 iptables -X
 iptables -t nat -F
 iptables -t nat -X
-iptables -t mangle -F
-iptables -t mangle -X
 ipset destroy allowed-domains 2>/dev/null || true
 
 # 2. Selectively restore ONLY internal Docker DNS resolution
@@ -24,61 +42,31 @@ else
     echo "No Docker DNS rules to restore"
 fi
 
-# First allow DNS and localhost before any restrictions
-# Allow outbound DNS
+# DNS and localhost must work before anything else can be resolved or allowed.
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-# Allow inbound DNS responses
 iptables -A INPUT -p udp --sport 53 -j ACCEPT
-# Allow outbound SSH
-iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
-# Allow inbound SSH responses
-iptables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
-# Allow localhost
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
 # Create ipset with CIDR support
 ipset create allowed-domains hash:net
 
-# Fetch GitHub meta information and aggregate + add their IP ranges
-echo "Fetching GitHub IP ranges..."
-gh_ranges=$(curl -s https://api.github.com/meta)
-if [ -z "$gh_ranges" ]; then
-    echo "ERROR: Failed to fetch GitHub IP ranges"
+# Resolve and add the whitelisted domains
+echo "Reading whitelist from $ALLOWED_DOMAINS_FILE"
+domains=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$ALLOWED_DOMAINS_FILE" | grep -v '^$' || true)
+if [ -z "$domains" ]; then
+    echo "ERROR: no domains listed in $ALLOWED_DOMAINS_FILE"
     exit 1
 fi
 
-if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null; then
-    echo "ERROR: GitHub API response missing required fields"
-    exit 1
-fi
-
-echo "Processing GitHub IPs..."
-while read -r cidr; do
-    if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-        echo "ERROR: Invalid CIDR range from GitHub meta: $cidr"
-        exit 1
-    fi
-    echo "Adding GitHub range $cidr"
-    ipset add -exist allowed-domains "$cidr"
-done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
-
-# Resolve and add other allowed domains
-for domain in \
-    "registry.npmjs.org" \
-    "api.anthropic.com" \
-    "sentry.io" \
-    "statsig.com" \
-    "marketplace.visualstudio.com" \
-    "vscode.blob.core.windows.net" \
-    "update.code.visualstudio.com"; do
+for domain in $domains; do
     echo "Resolving $domain..."
     ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}')
     if [ -z "$ips" ]; then
         echo "ERROR: Failed to resolve $domain"
         exit 1
     fi
-    
+
     while read -r ip; do
         if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
             echo "ERROR: Invalid IP from DNS for $domain: $ip"
@@ -119,18 +107,3 @@ iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 
 echo "Firewall configuration complete"
-echo "Verifying firewall rules..."
-if curl --connect-timeout 5 https://example.com >/dev/null 2>&1; then
-    echo "ERROR: Firewall verification failed - was able to reach https://example.com"
-    exit 1
-else
-    echo "Firewall verification passed - unable to reach https://example.com as expected"
-fi
-
-# Verify GitHub API access
-if ! curl --connect-timeout 5 https://api.github.com/zen >/dev/null 2>&1; then
-    echo "ERROR: Firewall verification failed - unable to reach https://api.github.com"
-    exit 1
-else
-    echo "Firewall verification passed - able to reach https://api.github.com as expected"
-fi

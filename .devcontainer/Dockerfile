@@ -64,10 +64,12 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 # Copy and set up scripts
 COPY init-firewall.sh /usr/local/bin/
 COPY verify.sh /usr/local/bin/
+COPY allowed-domains.txt /usr/local/etc/
 USER root
 RUN echo 'export PATH="$PATH:/usr/local/share/npm-global/bin"' \
       > /etc/profile.d/npm-global-path.sh && \
     chmod 0644 /etc/profile.d/npm-global-path.sh && \
+    chmod 0644 /usr/local/etc/allowed-domains.txt && \
     chmod +x /usr/local/bin/init-firewall.sh && \
     chmod +x /usr/local/bin/verify.sh && \
     echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \

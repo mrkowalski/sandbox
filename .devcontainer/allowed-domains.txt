@@ -1,0 +1,21 @@
+# Egress whitelist for the Claude Code sandbox.
+#
+# One hostname per line. Blank lines and lines starting with '#' are ignored.
+# Each name is resolved at firewall setup time and its A records are added to
+# the `allowed-domains` ipset; everything else is rejected.
+#
+# Edit this file and rebuild the container to change what the sandbox can reach.
+# Note that a failure to resolve any listed name aborts firewall setup.
+
+# --- required ---------------------------------------------------------------
+
+# Claude Code's API. Without this the agent cannot run at all.
+api.anthropic.com
+
+# npm registry: Claude Code self-updates and project dependency installs.
+registry.npmjs.org
+
+# Claude Code telemetry / feature flags.
+statsig.com
+sentry.io
+

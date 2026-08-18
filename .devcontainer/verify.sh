@@ -372,7 +372,6 @@ check_reachable "https://api.anthropic.com/v1/messages" "api.anthropic.com (API)
 check_reachable "https://statsig.com"                        "statsig.com (feature flags)"           optional
 check_reachable "https://sentry.io"                          "sentry.io (error reporting)"           optional
 check_reachable "https://registry.npmjs.org/-/ping"          "registry.npmjs.org (updates)"          optional
-check_reachable "https://api.github.com/zen"                 "api.github.com"                        optional
 
 # ---------------------------------------------------------------------------
 # Check 4: iptables whitelist mode
