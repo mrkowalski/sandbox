@@ -8,6 +8,11 @@ It is loosely based on https://github.com/anthropics/claude-code/tree/main/.devc
 
 It is a headless sandbox; it contains no human-facing features. It only restricts what Claude Code can do and and makes cost the only risk of the `--dangerously-skip-permissions` flag.
 
+### Crucially:
+
+- it does not allow `git push`
+- it mounts the container fs as readonly except for volumes and tmps
+
 ## Running
 
 ### Install devcontainers
