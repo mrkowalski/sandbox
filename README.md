@@ -19,6 +19,19 @@ It is a headless sandbox; it contains no human-facing features. It only restrict
 
 `npm install -g @devcontainers/cli`
 
+### Clone the repo into a tools folder
+
+`git clone https://github.com/mrkowalski/sandbox ~/tools/sandbox`
+
+### Put into your `.bashrc`:
+
+```bash
+# ~/.bashrc
+SBX=~/tools/sandbox/.devcontainer/devcontainer.json
+sbx-up()   { devcontainer up --workspace-folder "$PWD" --config "$SBX" --remove-existing-container; }
+sbx-claude(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude --dangerously-skip-permissions; }
+```
+
 ### Start the dev container
 
 `devcontainer up --workspace-folder . --remove-existing-container`
