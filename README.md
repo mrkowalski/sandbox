@@ -31,11 +31,3 @@ SBX=~/tools/sandbox/.devcontainer/devcontainer.json
 sbx-up()   { devcontainer up --workspace-folder "$PWD" --config "$SBX" --remove-existing-container; }
 sbx-claude(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude --dangerously-skip-permissions; }
 ```
-
-### Start the dev container
-
-`devcontainer up --workspace-folder . --remove-existing-container`
-
-### Run Claude Code inside the dev container
-
-`devcontainer exec --workspace-folder . claude --dangerously-skip-permissions`
