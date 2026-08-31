@@ -18,3 +18,8 @@ registry.npmjs.org
 # Claude Code telemetry / feature flags.
 statsig.com
 sentry.io
+
+## CloudFlare docs
+
+developers.cloudflare.com
+docs.mcp.cloudflare.com
