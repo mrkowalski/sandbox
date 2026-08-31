@@ -58,8 +58,8 @@ ENV PATH=$PATH:/usr/local/share/npm-global/bin
 ENV EDITOR=vim
 ENV VISUAL=vim
 
-# Install Claude
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+RUN npm install -g @fission-ai/openspec@latest
 
 # Copy and set up scripts
 COPY init-firewall.sh /usr/local/bin/
