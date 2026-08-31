@@ -9,6 +9,20 @@
 #   2. `git push` is impossible over SSH and over HTTPS (no credentials)
 #   3. The Anthropic endpoints Claude Code needs are reachable
 #   4. iptables is in whitelist mode (OUTPUT policy is DROP)
+#   5. Firewall installation was anchored to this container start, so a
+#      restart cannot bring the container back unprotected
+#
+# and that the writable mounts the container is granted are the ones intended,
+# and no more:
+#
+#   6. npm's cache directory is writable *and* exec-capable
+#   7. The rootfs outside those mounts is still read-only
+#
+# and that the sandbox tells the agent which commands cannot work in here,
+# rather than leaving it to find out by running them:
+#
+#   8. The host-only command list is installed, and the guard that enforces
+#      it blocks a declared command and passes an ordinary one
 #
 # Prints "VERIFIED" and exits 0 when every required check passes, otherwise
 # prints a summary of the failures and exits 1.
@@ -400,6 +414,319 @@ else
       bad "'sudo $SELF --iptables-only' returned no results - is $SELF a stale copy?"
     fi
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# Check 5: firewall installation is anchored to container start
+# ---------------------------------------------------------------------------
+#
+# The ruleset being correct right now says nothing about *how* it got that way.
+# postStartCommand runs only when the devcontainer CLI launches the container;
+# `docker start`, a Desktop restart button, or a restart after a host reboot
+# brings the container back with a fresh, empty network namespace and never runs
+# it. The image ENTRYPOINT is what covers those, and this check is how a
+# container that came up without it gets caught instead of quietly running open.
+#
+# /tmp is a tmpfs, recreated empty on every start, so the marker being present
+# means the entrypoint ran *this* start - not that it ran once, long ago.
+#
+# Stated plainly for whoever reads this next: the marker is a configuration
+# check, not an attestation. The agent runs as `node`, /tmp is writable, and it
+# could create the file itself. That is acceptable and is not what this is for -
+# verify.sh exists to catch a sandbox that was built or started wrong, and the
+# containment boundary is netfilter and the read-only rootfs, not this file.
+section "Firewall installation must run at every container start"
+
+FIREWALL_MARKER=/tmp/.sandbox-firewall-installed
+
+if [ -f "$FIREWALL_MARKER" ]; then
+  ok "the image entrypoint installed the firewall for this container start"
+else
+  bad "no entrypoint marker ($FIREWALL_MARKER) - the firewall was not installed at start"
+  info "the container was started by something that bypassed the image ENTRYPOINT,"
+  info "or from an image built before it existed; a restart of such a container"
+  info "comes back with an empty ruleset and nothing to report it"
+  info "first thing to check: devcontainer.json still sets \"overrideCommand\": false"
+fi
+
+# Nulls and newlines are squashed to keep the whole command on one line.
+PID1_CMD=$(tr "\0\n" "  " < /proc/1/cmdline 2>/dev/null | head -c 160)
+info "PID 1: ${PID1_CMD:-<unreadable>}"
+
+# This line is context, NOT attribution. It cannot tell you whether the
+# entrypoint ran: entrypoint.sh ends in `exec "$@"`, which replaces its own
+# process, so PID 1 is the container's command either way - the two cases are
+# byte-identical here. The marker above is the only check that detects a bypass.
+#
+# What PID 1 *can* tell you is *which* command is running, and that identifies
+# the cause. The devcontainer CLI's shim and the image's own keep-alive are both
+# `sleep 1 & wait` loops, but only the CLI's carries an `exec "$@"` - it is
+# written to exec a command that, with "overrideCommand": false, it never
+# supplies. Seeing it as PID 1 means the CLI created this container with
+# `--entrypoint /bin/sh` and the image ENTRYPOINT was discarded; because
+# `--entrypoint` is baked into the container config at create time, every later
+# `docker start` of it bypasses the entrypoint too. That is defect D, and it is
+# a FAIL rather than a warning because it silently disarms the enforcement point
+# while leaving a container that looks perfectly healthy from the outside.
+#
+# KEEP IN SYNC with the CMD in the Dockerfile - this string is the one thing
+# verify.sh knows about it. If the CMD's text changes, change this with it or
+# every launch will report a false FAIL.
+PID1_KEEPALIVE='sandbox keep-alive (image CMD)'
+
+if [ -z "$PID1_CMD" ]; then
+  warn "could not read /proc/1/cmdline - cannot tell which command PID 1 is"
+elif [[ "$PID1_CMD" == *"$PID1_KEEPALIVE"* ]]; then
+  ok "PID 1 is the image's own keep-alive - the image ENTRYPOINT was not overridden"
+elif [[ "$PID1_CMD" == *'exec "$@"'* ]]; then
+  bad "PID 1 is a launch tool's shim, not the image keep-alive - the ENTRYPOINT was overridden"
+  info "the devcontainer CLI creates the container with --entrypoint /bin/sh unless"
+  info "devcontainer.json sets \"overrideCommand\": false; check that it still does"
+  info "and recreate the container (--remove-existing-container), since the override"
+  info "is stored in the container config and survives every docker start"
+else
+  # A hand-run `docker run -it <image> bash` lands here, and so does any other
+  # deliberate command. Not a failure - the entrypoint still ran, which the
+  # marker above proves - but worth reporting, because it means this container
+  # is not shaped like the one a devcontainer launch produces.
+  warn "PID 1 is neither the image keep-alive nor a known launch-tool shim"
+  info "expected if this container was started by hand with an explicit command"
+fi
+
+# ---------------------------------------------------------------------------
+# Check 6: npm's cache is writable and exec-capable
+# ---------------------------------------------------------------------------
+#
+# The rootfs is read-only, so npm's cache has to come from a writable mount or
+# every registry fetch dies with EROFS before it can be written to disk.
+#
+# Writability alone is not sufficient, which is why there are two probes here.
+# `npx` stages a package under <cache>/_npx/<hash>/node_modules and then execs
+# its bin, so a cache placed on a `noexec` filesystem - the /tmp tmpfs, for
+# instance - clears the EROFS and then fails one step later with exit 126. A
+# check that only tested writability would score that broken state as healthy.
+#
+# The location is read from `npm config get cache` rather than hardcoded, so a
+# base image that changes npm's default path is reported here instead of
+# silently reintroducing EROFS at the first `npm install`.
+
+section "npm cache must be writable and executable"
+
+NPM_CACHE=$(npm config get cache 2>/dev/null | tr -d '\r' | tail -n 1)
+case "$NPM_CACHE" in null|undefined) NPM_CACHE="" ;; esac
+
+if [ -z "$NPM_CACHE" ]; then
+  bad "could not determine the npm cache directory ('npm config get cache')"
+elif [ ! -d "$NPM_CACHE" ]; then
+  bad "the npm cache directory does not exist: $NPM_CACHE"
+else
+  info "npm cache: $NPM_CACHE"
+
+  # Both probes live at the top level of the cache directory, never inside
+  # _cacache, so nothing they leave behind could be mistaken for cache content.
+  WRITE_PROBE="$NPM_CACHE/.verify-write-probe.$$"
+  if ( : > "$WRITE_PROBE" ) 2>/dev/null; then
+    ok "npm cache is writable"
+    rm -f "$WRITE_PROBE"
+  else
+    bad "npm cache is not writable ($NPM_CACHE) - 'npm install' and 'npx' fail with EROFS"
+  fi
+
+  EXEC_PROBE="$NPM_CACHE/.verify-exec-probe.$$.sh"
+  if ( printf '#!/bin/sh\necho exec-ok\n' > "$EXEC_PROBE" ) 2>/dev/null &&
+     chmod +x "$EXEC_PROBE" 2>/dev/null; then
+    if [ "$("$EXEC_PROBE" 2>/dev/null || true)" = "exec-ok" ]; then
+      ok "npm cache is exec-capable - 'npx <tool>' can run a staged binary"
+    else
+      bad "npm cache is mounted noexec ($NPM_CACHE) - 'npx <tool>' fails with exit 126"
+    fi
+  else
+    bad "could not stage the exec probe in the npm cache ($NPM_CACHE)"
+  fi
+  rm -f "$EXEC_PROBE"
+fi
+
+# ---------------------------------------------------------------------------
+# Check 7: the rootfs is still read-only
+# ---------------------------------------------------------------------------
+#
+# Every writable mount added to the container chips away at the guarantee that
+# the agent cannot tamper with the sandbox's own machinery. These probes pin
+# down what must stay read-only no matter what is mounted: the scripts that
+# install and check the firewall, the whitelist they read, the global
+# node_modules holding the claude binary, and $HOME itself - the named volumes
+# are mounted *inside* $HOME, so that last one is what proves they did not make
+# the whole home directory writable.
+
+section "read-only rootfs must still be read-only"
+
+# check_ro_dir <dir> <label> - the directory must reject a new file.
+check_ro_dir() {
+  local dir="$1" label="$2" probe
+  probe="$dir/.verify-ro-probe.$$"
+  if [ ! -d "$dir" ]; then
+    warn "$label: $dir does not exist; skipping"
+  elif ( : > "$probe" ) 2>/dev/null; then
+    rm -f "$probe"
+    bad "$label is WRITABLE ($dir) - the read-only rootfs has been weakened"
+  else
+    ok "$label is read-only ($dir)"
+  fi
+}
+
+# check_ro_file <file> <label> - the file must reject being opened for writing.
+# Opening in append mode and writing no bytes tests the permission without
+# risking a change to the contents of a file the firewall depends on.
+check_ro_file() {
+  local file="$1" label="$2"
+  if [ ! -e "$file" ]; then
+    bad "$label: $file is missing"
+  elif ( : >> "$file" ) 2>/dev/null; then
+    bad "$label is WRITABLE ($file) - the read-only rootfs has been weakened"
+  else
+    ok "$label is read-only ($file)"
+  fi
+}
+
+check_ro_dir  "/usr/local/bin"                     "sandbox scripts"
+check_ro_file "/usr/local/etc/allowed-domains.txt" "egress whitelist"
+
+GLOBAL_MODULES=$(npm root -g 2>/dev/null | tr -d '\r' | tail -n 1)
+if [ -n "$GLOBAL_MODULES" ]; then
+  check_ro_dir "$GLOBAL_MODULES" "global node_modules (claude binary)"
+else
+  bad "could not determine the global node_modules directory ('npm root -g')"
+fi
+
+check_ro_dir "$HOME" "\$HOME (the named volumes mount inside it)"
+
+# ---------------------------------------------------------------------------
+# Check 8: host-only commands are declared and enforced
+# ---------------------------------------------------------------------------
+#
+# Unlike the checks above, this one is about what the *agent* can do rather
+# than what the network allows. It is not a containment guarantee - a host-only
+# command is already blocked at the network layer - so it is checked here for
+# the same reason everything else is: a capability the container claims should
+# be asserted at every start rather than documented and hoped for.
+#
+# Every failure below is `bad`, so a broken guard blocks the launch. That is
+# deliberate: a guard that silently stops matching would put the agent back to
+# discovering these commands by running them, which is the failure this exists
+# to remove.
+
+section "Host-only command guard"
+
+HOST_ONLY_LIST=/usr/local/etc/host-only-commands.txt
+HOST_ONLY_GUARD=/usr/local/bin/host-only-guard.sh
+HOST_ONLY_SETTINGS=/etc/claude-code/managed-settings.json
+HOST_ONLY_POLICY=/etc/claude-code/CLAUDE.md
+
+# A command the shipped list is expected to declare host-only. This is the only
+# thing verify.sh knows about the list's *contents*; if the wrangler entries are
+# ever dropped, point this at something the new list does declare.
+HOST_ONLY_SAMPLE='npx wrangler login'
+
+# An ordinary command that must never be blocked. Over-blocking is as much a
+# failure as under-blocking: it would leave the agent unable to work.
+HOST_ONLY_ORDINARY='ls -la'
+
+# guard_probe <command> [list-path] -> sets GUARD_RC and GUARD_OUT
+# Feeds the guard a synthetic PreToolUse payload, exactly as Claude Code would.
+guard_probe() {
+  local cmd="$1" list="${2:-$HOST_ONLY_LIST}" payload
+  payload=$(jq -n --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}')
+  GUARD_OUT=$(printf '%s' "$payload" | HOST_ONLY_COMMANDS="$list" "$HOST_ONLY_GUARD" 2>&1)
+  GUARD_RC=$?
+}
+
+HOST_ONLY_OK=1
+
+for f in "$HOST_ONLY_LIST" "$HOST_ONLY_GUARD" "$HOST_ONLY_SETTINGS" "$HOST_ONLY_POLICY"; do
+  if [ -r "$f" ]; then
+    ok "installed: $f"
+  else
+    bad "missing or unreadable: $f"
+    HOST_ONLY_OK=0
+  fi
+done
+
+if [ -x "$HOST_ONLY_GUARD" ]; then
+  ok "$HOST_ONLY_GUARD is executable"
+else
+  bad "$HOST_ONLY_GUARD is not executable - the hook would fail to run"
+  HOST_ONLY_OK=0
+fi
+
+# The settings file is what actually activates the guard; a correct script that
+# nothing invokes is the quietest possible way for this to be broken.
+if [ -r "$HOST_ONLY_SETTINGS" ] && grep -qF "$HOST_ONLY_GUARD" "$HOST_ONLY_SETTINGS"; then
+  ok "managed settings register the guard as a PreToolUse hook"
+else
+  bad "managed settings do not reference $HOST_ONLY_GUARD"
+  info "the guard would never be invoked; see $HOST_ONLY_SETTINGS"
+  HOST_ONLY_OK=0
+fi
+
+if [ "$HOST_ONLY_OK" -eq 1 ]; then
+  # The list must parse. The guard validates it the same way at hook time, so
+  # asking the guard keeps one implementation of the rules.
+  if PARSE_OUT=$(HOST_ONLY_COMMANDS="$HOST_ONLY_LIST" "$HOST_ONLY_GUARD" --check-list 2>&1); then
+    ok "${PARSE_OUT#host-only-guard: }"
+  else
+    bad "$HOST_ONLY_LIST does not parse"
+    while IFS= read -r l; do info "${l#host-only-guard: }"; done <<<"$PARSE_OUT"
+  fi
+
+  # Exercise the guard rather than trusting its configuration: a listed command
+  # must be blocked, and an ordinary one must not.
+  guard_probe "$HOST_ONLY_SAMPLE"
+  if [ "$GUARD_RC" -eq 2 ]; then
+    ok "guard blocks a declared host-only command ('$HOST_ONLY_SAMPLE')"
+  else
+    bad "guard did NOT block '$HOST_ONLY_SAMPLE' (exit $GUARD_RC)"
+    info "either the guard is broken, or the list no longer declares it -"
+    info "update HOST_ONLY_SAMPLE in this script if the list changed on purpose"
+  fi
+
+  guard_probe "$HOST_ONLY_ORDINARY"
+  if [ "$GUARD_RC" -eq 0 ] && [ -z "$GUARD_OUT" ]; then
+    ok "guard passes an ordinary command through silently ('$HOST_ONLY_ORDINARY')"
+  else
+    bad "guard interfered with '$HOST_ONLY_ORDINARY' (exit $GUARD_RC)"
+    [ -n "$GUARD_OUT" ] && info "$(head -n 1 <<<"$GUARD_OUT")"
+  fi
+
+  # The two probes above depend on the shipped list's contents. Repeat them
+  # against a list written here, so a guard whose matching has stopped working
+  # is caught even if the shipped list is what changed.
+  GUARD_PROBE_DIR=$(mktemp -d)
+  printf '%s\n' \
+    'sandbox-verify-probe([[:space:]]|$)  ::  synthetic entry used by verify.sh' \
+    > "$GUARD_PROBE_DIR/list.txt"
+
+  guard_probe 'sandbox-verify-probe' "$GUARD_PROBE_DIR/list.txt"
+  BLOCKS_SYNTHETIC=$([ "$GUARD_RC" -eq 2 ] && echo 1 || echo 0)
+  guard_probe 'echo hello' "$GUARD_PROBE_DIR/list.txt"
+  ALLOWS_SYNTHETIC=$([ "$GUARD_RC" -eq 0 ] && echo 1 || echo 0)
+
+  if [ "$BLOCKS_SYNTHETIC" -eq 1 ] && [ "$ALLOWS_SYNTHETIC" -eq 1 ]; then
+    ok "guard matching works against a list written by this script"
+  else
+    bad "guard matching is broken (synthetic block=$BLOCKS_SYNTHETIC allow=$ALLOWS_SYNTHETIC)"
+  fi
+
+  # Failing closed on a broken policy is the whole point; check it explicitly.
+  guard_probe "$HOST_ONLY_ORDINARY" "$GUARD_PROBE_DIR/does-not-exist.txt"
+  if [ "$GUARD_RC" -eq 2 ]; then
+    ok "guard refuses commands when the list is missing (fails closed)"
+  else
+    bad "guard allowed a command with a missing list (exit $GUARD_RC) - it fails open"
+  fi
+
+  rm -rf "$GUARD_PROBE_DIR"
+else
+  info "skipping the behavioural probes - the guard is not installed correctly"
 fi
 
 # ---------------------------------------------------------------------------

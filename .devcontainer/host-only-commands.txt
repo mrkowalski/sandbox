@@ -1,0 +1,68 @@
+# Commands that cannot work inside the Claude Code sandbox.
+#
+# This file is the whole policy. It is the only place a command is declared
+# host-only; host-only-guard.sh reads it and holds no rules of its own. It is
+# the mirror image of allowed-domains.txt: that file is the only place the
+# sandbox is widened, this one is the only place a command is declared
+# unrunnable. Edit this file and rebuild the container to change either.
+#
+# This is NOT a security boundary. Containment is the firewall and the
+# read-only rootfs; a command listed here stays blocked at the network layer
+# whether or not the guard runs. The guard exists so the agent knows, and
+# says, what is impossible instead of discovering it as an opaque failure.
+#
+# --- format -----------------------------------------------------------------
+#
+#     <pattern>  ::  <what the user should be told>
+#
+# Blank lines and lines starting with '#' are ignored. The separator is
+# ' :: ' (space colon colon space); surrounding whitespace is trimmed.
+#
+# <pattern> is a POSIX ERE. The guard anchors it at the START of each
+# normalized command segment, so write the pattern as the command itself --
+# do not add a leading '^'. To match mid-segment, start the pattern with '.*'.
+#
+# Before matching, the guard normalizes the command the agent submitted:
+#
+#   - heredoc bodies are removed, so writing a host-only command into a file
+#     or a document is never mistaken for running it -- the agent is told to
+#     quote these commands to the user, and must stay able to;
+#   - the command is split on ; && || | ( ) into segments, so a listed command
+#     is caught as one element of a chain;
+#   - each segment has leading VAR=value assignments and runner words (npx,
+#     bunx, pnpm dlx, yarn dlx, sudo, env, time, ...) stripped, and the
+#     remaining command is reduced to its basename.
+#
+# So `cd app && npx wrangler deploy --env prod` is matched by a pattern that
+# reads simply `wrangler ... deploy`.
+#
+# <what the user should be told> is printed verbatim to the agent, which is
+# instructed to relay it. Say why the command cannot work here and what to run
+# on the host. The guard already quotes the exact command it blocked, so the
+# text does not need to repeat it.
+#
+# --- escape hatch -----------------------------------------------------------
+#
+# A wrong pattern must never require a container rebuild to get around:
+#
+#     HOST_ONLY_GUARD_BYPASS=1 npx wrangler deploy
+#
+# runs the command anyway, for that one invocation, with a note that the guard
+# was bypassed. If you need the bypass twice, fix the entry instead.
+#
+# --- entries ----------------------------------------------------------------
+
+# Cloudflare / wrangler.
+#
+# Grouped by why they cannot work rather than one line per subcommand, so each
+# entry can carry a remedy that is actually true of every command it matches.
+# wrangler subcommands that only touch local files -- `dev`, `types`, `init`,
+# `check` -- are deliberately absent and run normally.
+
+wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(login|logout|whoami)([[:space:]]|$)  ::  Cloudflare authentication writes its credentials into the host user's home directory, which is not mounted in this sandbox, and api.cloudflare.com is not on the sandbox's egress whitelist. Authenticating here cannot succeed, and authenticating on the host does not propagate in -- the credentials stay on the host. Run this command in a terminal on the host, in the same project directory, and run any command that needs the resulting session there too.
+
+wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(deploy|publish|versions|rollback)([[:space:]]|$)  ::  Deploying needs Cloudflare credentials that live on the host and an API endpoint the sandbox's firewall does not allow. Run this command in a terminal on the host, in the same project directory. Everything up to the deploy -- editing, building, testing -- can still be done in here.
+
+wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(secret|d1|kv|r2)(:[a-z]+)?([[:space:]]|$)  ::  This acts on resources in your Cloudflare account, which needs credentials that live on the host and an API endpoint the sandbox's firewall does not allow. Run this command in a terminal on the host, in the same project directory.
+
+wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+tail([[:space:]]|$)  ::  Tailing logs streams them from a deployed Worker over an endpoint the sandbox's firewall does not allow, using credentials that live on the host. Run this command in a terminal on the host.

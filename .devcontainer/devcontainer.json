@@ -15,7 +15,8 @@
   "remoteUser": "node",
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
-    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume"
+    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=claude-code-npm-${devcontainerId},target=/home/node/.npm,type=volume"
   ],
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
@@ -25,6 +26,18 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
+
+  // Load-bearing, and not removable. The CLI's default (true) creates the
+  // container with `--entrypoint /bin/sh` and its own sleep shim, which
+  // *replaces* the image ENTRYPOINT - the enforcement point that installs the
+  // firewall. That is not a per-start flag: `--entrypoint` is written into the
+  // container's config at create time, so every later `docker start` of that
+  // container bypasses the entrypoint too. On 2026-08-31 this left a container
+  // running with OUTPUT policy ACCEPT and no ipset while every implementation
+  // task read as done. With the override off, the container's command comes
+  // from the image's own keep-alive CMD instead; the two go together.
+  "overrideCommand": false,
+
   "postStartCommand": "sudo /usr/local/bin/init-firewall.sh && /usr/local/bin/verify.sh",
   "waitFor": "postStartCommand"
 }
