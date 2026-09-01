@@ -2,7 +2,6 @@ FROM node:24-trixie-slim
 
 ARG CLAUDE_CODE_VERSION=latest
 
-# Install basic development tools and iptables/ipset
 RUN apt-get update && apt-get install -y --no-install-recommends \
   less \
   git \
@@ -48,21 +47,22 @@ RUN mkdir -p /workspace /home/node/.claude && \
 
 WORKDIR /workspace
 
-# Set up non-root user
 USER node
 
 # Install global packages
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH=$PATH:/usr/local/share/npm-global/bin
 
-# Set the default editor and visual
 ENV EDITOR=vim
 ENV VISUAL=vim
+
+# Claude code - no updates and no checks
+ENV DISABLE_UPDATES=1
+ENV DISABLE_AUTOUPDATER=1
 
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 RUN npm install -g @fission-ai/openspec@latest
 
-# Copy and set up scripts
 COPY init-firewall.sh /usr/local/bin/
 COPY entrypoint.sh /usr/local/bin/
 COPY verify.sh /usr/local/bin/
