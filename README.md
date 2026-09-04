@@ -82,9 +82,15 @@ HOST_ONLY_GUARD_BYPASS=1 npx wrangler deploy
 
 ## Maintenance
 
-Each container gets its own npm cache volume (`claude-code-npm-<devcontainerId>`) so that `npm install` and `npx` work against the read-only rootfs. npm never prunes that cache on its own, so it grows without bound. To reclaim the space, either run `npm cache clean --force` inside the container, or remove the volume from the host:
+### Container volumes
+
+Each container gets its own npm cache volume (`claude-code-npm-<devcontainerId>`) so that `npm install` and `npx` work against the read-only rootfs. npm never prunes that cache on its own. To reclaim the space, either run `npm cache clean --force` inside the container, or remove the volume from the host:
 
 ```bash
 docker volume ls  | grep claude-code-npm     # find them
 docker volume rm  <volume-name>              # container must be stopped
 ```
+
+### OpenSpec maintenance
+
+Run `openspec update` after bumping the npm package, it regenerates `.claude/skills` and prunes anything deselected, so public tree doesn't accumulate stale command files.
