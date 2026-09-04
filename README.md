@@ -18,7 +18,9 @@ It is a headless sandbox; it contains no human-facing features. It restricts wha
 
 ### Install devcontainers
 
-`npm install -g @devcontainers/cli`
+```bash
+npm install -g @devcontainers/cli
+```
 
 ### Clone the repo into a homedir folder (tools)
 
