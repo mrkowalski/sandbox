@@ -24,7 +24,9 @@ npm install -g @devcontainers/cli
 
 ### Clone the repo into a homedir folder (tools)
 
-`git clone https://github.com/mrkowalski/sandbox ~/tools/sandbox`
+```bash
+git clone https://github.com/mrkowalski/sandbox ~/tools/sandbox
+```
 
 ### Put into your `.bashrc`:
 
