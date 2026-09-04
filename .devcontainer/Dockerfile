@@ -60,6 +60,9 @@ ENV VISUAL=vim
 ENV DISABLE_UPDATES=1
 ENV DISABLE_AUTOUPDATER=1
 
+# OpenSpec telemetry
+ENV OPENSPEC_TELEMETRY=0
+
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 RUN npm install -g @fission-ai/openspec@latest
 
